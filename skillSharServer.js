@@ -1,6 +1,7 @@
 const { createServer } = require("http");
 const ecstatic = require("ecstatic");
 const Router = require("./router");
+const { title } = require("process");
 
 const router = new Router();
 const defaultHeaders = { "Content-Type": "text/plain" };
@@ -67,8 +68,72 @@ router.add("DELETE", talkPath, async (server, title) => {
 function readStream(stream) {
   return new Promise((resolve, reject) => {
     let data = "";
-    stream.on("errort", reject);
+    stream.on("error", reject);
     stream.on("data", (chunck) => (data += chunck.toString()));
     stream.on("end", () => resolve(data));
   });
 }
+
+// create a handler (PUT) methd which read the request body.
+//It has to check whether the data it was given has presenter and summary
+//properties, which are strings.
+//use trycatch block to handle with any data coming outside the system
+//to avoid that the prgram to crash or corrupt our internal data model
+router.add("PUT", async (server, title, request) => {
+  let requestBody = readStream(request);
+  let talk;
+  try {
+    talk = JSON.parse(requestBody);
+  } catch (_) {
+    return { status: 400, body: "Invalid JSON" };
+  }
+
+  if (
+    !talk ||
+    typeof talk.presenter != "string" ||
+    typeof talk.summary != "string"
+  ) {
+    return { status: 400, body: "Bad talk data" };
+  }
+
+  server.talks[title] = {
+    title,
+    presenter: talk.presenter,
+    summary: talk.summary,
+    comments: [],
+  };
+  server.updated();
+  return { status: 204 };
+});
+
+//add comment to the talks by using reastream methd to read the content
+//of the request and validate the resulting data and store it as comment
+// when it looks good upon validation.
+
+router.add(
+  "POST",
+  /^\/talks\/([^\/]+)\/comments$/,
+  (server, title, request) => {
+    let requestBody = readStream(request);
+    let comment;
+    try {
+      comment = JSON.parse(requestBody);
+    } catch (_) {
+      return { status: 400, body: "Invalid JSON" };
+    }
+    if (
+      !comment ||
+      typeof comment.author != "string" ||
+      typeof comment.message != "string"
+    ) {
+      return { status: 400, body: "Bad comment data" };
+    } else if (title in server.talks) {
+      server.talks[title].comments.push(comment);
+      server.updated();
+      return { status: 204 };
+    } else {
+      //nonexistent talk returns a 404 error
+      return { status: 404, body: `No title ${title} found` };
+    }
+  }
+);
